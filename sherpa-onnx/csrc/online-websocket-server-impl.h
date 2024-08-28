@@ -17,10 +17,12 @@
 #include <vector>
 
 #include "asio.hpp"
+#include "sherpa-onnx/csrc/offline-punctuation.h"
 #include "sherpa-onnx/csrc/online-recognizer.h"
 #include "sherpa-onnx/csrc/online-stream.h"
 #include "sherpa-onnx/csrc/parse-options.h"
 #include "sherpa-onnx/csrc/tee-stream.h"
+#include "sherpa-onnx/csrc/voice-activity-detector.h"
 #include "websocketpp/config/asio_no_tls.hpp"  // TODO(fangjun): support TLS
 #include "websocketpp/server.hpp"
 using server = websocketpp::server<websocketpp::config::asio>;
@@ -48,6 +50,8 @@ struct Connection {
   // The I/O threads receive audio samples into this queue
   // and invoke work threads to compute features
   std::deque<std::vector<float>> samples;
+
+  std::shared_ptr<sherpa_onnx::VoiceActivityDetector> vad = NULL;
 
   Connection() = default;
   Connection(connection_hdl hdl, std::shared_ptr<OnlineStream> s)
@@ -116,6 +120,8 @@ class OnlineWebsocketDecoder {
   // If we are decoding a stream, we put it in the active_ set so that
   // only one thread can decode a stream at a time.
   std::set<connection_hdl, std::owner_less<connection_hdl>> active_;
+  std::shared_ptr<sherpa_onnx::OfflinePunctuation> punctu = NULL;
+  int32_t k = 0;
 };
 
 struct OnlineWebsocketServerConfig {

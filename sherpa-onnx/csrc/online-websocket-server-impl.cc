@@ -8,8 +8,34 @@
 
 #include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/log.h"
+#include "sherpa-onnx/csrc/wave-writer.h"
 
 namespace sherpa_onnx {
+
+static std::shared_ptr<sherpa_onnx::OfflinePunctuation> GetPunctuation() {
+  sherpa_onnx::OfflinePunctuationConfig punct_config;
+  memset(&punct_config, 0, sizeof(punct_config));
+  punct_config.model.ct_transformer = "./punct.onnx";
+  punct_config.model.num_threads = 1;
+  punct_config.model.debug = 1;
+  punct_config.model.provider = "cpu";
+  if (!punct_config.Validate()) {
+    fprintf(stderr, "Errors in config!\n");
+    return NULL;
+  }
+  return std::make_shared<sherpa_onnx::OfflinePunctuation>(punct_config);
+}
+
+static std::shared_ptr<sherpa_onnx::VoiceActivityDetector> GetVAD() {
+  sherpa_onnx::VadModelConfig vad_config;
+  vad_config.silero_vad.model = "./silero_vad.onnx";
+  vad_config.silero_vad.threshold = 0.2;
+  if (!vad_config.Validate()) {
+    fprintf(stderr, "Errors in config!\n");
+    return NULL;
+  }
+  return std::make_shared<sherpa_onnx::VoiceActivityDetector>(vad_config);
+}
 
 void OnlineWebsocketDecoderConfig::Register(ParseOptions *po) {
   recognizer_config.Register(po);
@@ -48,6 +74,10 @@ OnlineWebsocketDecoder::OnlineWebsocketDecoder(OnlineWebsocketServer *server)
       config_(server->GetConfig().decoder_config),
       timer_(server->GetWorkContext()) {
   recognizer_ = std::make_unique<OnlineRecognizer>(config_.recognizer_config);
+  punctu = GetPunctuation();
+  if (!punctu) {
+    printf("punctu is NULL\n");
+  }
 }
 
 std::shared_ptr<Connection> OnlineWebsocketDecoder::GetOrCreateConnection(
@@ -60,6 +90,7 @@ std::shared_ptr<Connection> OnlineWebsocketDecoder::GetOrCreateConnection(
     // create a new connection
     std::shared_ptr<OnlineStream> s = recognizer_->CreateStream();
     auto c = std::make_shared<Connection>(hdl, s);
+    c->vad = GetVAD();
     connections_.insert({hdl, c});
     return c;
   }
@@ -68,10 +99,32 @@ std::shared_ptr<Connection> OnlineWebsocketDecoder::GetOrCreateConnection(
 void OnlineWebsocketDecoder::AcceptWaveform(std::shared_ptr<Connection> c) {
   std::lock_guard<std::mutex> lock(c->mutex);
   float sample_rate = config_.recognizer_config.feat_config.sampling_rate;
-  while (!c->samples.empty()) {
-    const auto &s = c->samples.front();
-    c->s->AcceptWaveform(sample_rate, s.data(), s.size());
-    c->samples.pop_front();
+  if (c->vad) {
+    while (!c->samples.empty()) {
+      const auto &s = c->samples.front();
+      c->vad->AcceptWaveform(s.data(), s.size());
+      c->samples.pop_front();
+    }
+    while (!c->vad->Empty()) {
+      const auto &s = c->vad->Front();
+      c->s->AcceptWaveform(sample_rate, s.samples.data(), s.samples.size());
+
+      /*float duration = s.samples.size() / sample_rate;
+      fprintf(stderr, "Duration: %.3f seconds\n", duration);
+      char filename[128];
+      snprintf(filename, sizeof(filename), "seg-%d-%.3fs.wav", k, duration);
+      k += 1;
+      sherpa_onnx::WriteWave(filename, sample_rate, s.samples.data(),
+                             s.samples.size());*/
+
+      c->vad->Pop();
+    }
+  } else {
+    while (!c->samples.empty()) {
+      const auto &s = c->samples.front();
+      c->s->AcceptWaveform(sample_rate, s.data(), s.size());
+      c->samples.pop_front();
+    }
   }
 }
 
@@ -212,10 +265,17 @@ void OnlineWebsocketDecoder::Decode() {
       result.is_final = true;
     }
 
-    asio::post(server_->GetConnectionContext(),
-               [this, hdl = c->hdl, str = result.AsJsonString()]() {
-                 server_->Send(hdl, str);
-               });
+    if (punctu && result.text.empty() == false) {
+      printf("text size [%ld] content [%s]\n", result.text.size(), result.text.c_str());
+      result.text = punctu->AddPunctuation(result.text);
+    }
+
+    if (result.text.empty() == false) {
+      asio::post(server_->GetConnectionContext(),
+                 [this, hdl = c->hdl, str = result.AsJsonString()]() {
+                   server_->Send(hdl, str);
+                 });
+    }
     active_.erase(c->hdl);
   }
 }
