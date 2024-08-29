@@ -7,8 +7,34 @@
 #include <algorithm>
 
 #include "sherpa-onnx/csrc/macros.h"
+#include "sherpa-onnx/csrc/wave-writer.h"
 
 namespace sherpa_onnx {
+
+static std::shared_ptr<sherpa_onnx::OfflinePunctuation> GetPunctuation() {
+  sherpa_onnx::OfflinePunctuationConfig punct_config;
+  memset(&punct_config, 0, sizeof(punct_config));
+  punct_config.model.ct_transformer = "./punct.onnx";
+  punct_config.model.num_threads = 1;
+  punct_config.model.debug = 1;
+  punct_config.model.provider = "cpu";
+  if (!punct_config.Validate()) {
+    fprintf(stderr, "Errors in config!\n");
+    return NULL;
+  }
+  return std::make_shared<sherpa_onnx::OfflinePunctuation>(punct_config);
+}
+
+static std::shared_ptr<sherpa_onnx::VoiceActivityDetector> GetVAD() {
+  sherpa_onnx::VadModelConfig vad_config;
+  vad_config.silero_vad.model = "./silero_vad.onnx";
+  vad_config.silero_vad.threshold = 0.2;
+  if (!vad_config.Validate()) {
+    fprintf(stderr, "Errors in config!\n");
+    return NULL;
+  }
+  return std::make_shared<sherpa_onnx::VoiceActivityDetector>(vad_config);
+}
 
 void OfflineWebsocketDecoderConfig::Register(ParseOptions *po) {
   recognizer_config.Register(po);
@@ -44,7 +70,12 @@ void OfflineWebsocketDecoderConfig::Validate() const {
 OfflineWebsocketDecoder::OfflineWebsocketDecoder(OfflineWebsocketServer *server)
     : config_(server->GetConfig().decoder_config),
       server_(server),
-      recognizer_(config_.recognizer_config) {}
+      recognizer_(config_.recognizer_config) {
+  punctu = GetPunctuation();
+  if (!punctu) {
+    printf("punctu is NULL\n");
+  }
+}
 
 void OfflineWebsocketDecoder::Push(connection_hdl hdl, ConnectionDataPtr d) {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -75,6 +106,7 @@ void OfflineWebsocketDecoder::Decode() {
   std::vector<std::unique_ptr<OfflineStream>> ss(size);
   std::vector<OfflineStream *> p_ss(size);
 
+  printf("gj 0\n");
   for (int32_t i = 0; i != size; ++i) {
     auto &p = streams_.front();
     handles[i] = p.first;
@@ -86,7 +118,31 @@ void OfflineWebsocketDecoder::Decode() {
         reinterpret_cast<const float *>(&connection_data[i]->data[0]);
     auto num_samples = connection_data[i]->expected_byte_size / sizeof(float);
     auto s = recognizer_.CreateStream();
-    s->AcceptWaveform(sample_rate, samples, num_samples);
+    if (connection_data[i]->vad) {
+      printf("gj acceptwave %ld\n", num_samples);
+      connection_data[i]->vad->AcceptWaveform(samples, num_samples);
+      printf("gj acceptwave2 %ld\n", num_samples);
+      SpeechSegment vad_segment;
+      printf("gj acceptwave3 %ld\n", num_samples);
+      vad_segment.samples.resize(num_samples);
+      printf("gj acceptwave4 %ld\n", num_samples);
+      int32_t real_size = 0;
+      while (!connection_data[i]->vad->Empty()) {
+        auto &segment = connection_data[i]->vad->Front();
+        printf("gj copy %ld\n", segment.samples.size());
+        std::copy(segment.samples.begin(), segment.samples.end(), vad_segment.samples.end());
+        real_size += vad_segment.samples.size();
+        connection_data[i]->vad->Pop();
+      }
+      if (real_size == 0) {
+        continue;
+      }
+      s->AcceptWaveform(sample_rate, vad_segment.samples.data(), real_size);
+      printf("s size real_size [%d]\n", real_size);
+    } else {
+      s->AcceptWaveform(sample_rate, samples, num_samples);
+      printf("s size num_samples [%ld]\n", num_samples);
+    }
 
     ss[i] = std::move(s);
     p_ss[i] = ss[i].get();
@@ -99,6 +155,13 @@ void OfflineWebsocketDecoder::Decode() {
 
   for (int32_t i = 0; i != size; ++i) {
     connection_hdl hdl = handles[i];
+    if (punctu) {
+      OfflineRecognitionResult result = ss[i]->GetResult();
+      if (result.text.empty() == false) {
+        result.text = punctu->AddPunctuation(result.text);
+        ss[i]->SetResult(result);
+      }
+    }
     asio::post(server_->GetConnectionContext(),
                [this, hdl, result = ss[i]->GetResult()]() {
                  websocketpp::lib::error_code ec;
@@ -161,6 +224,9 @@ void OfflineWebsocketServer::SetupLog() {
 void OfflineWebsocketServer::OnOpen(connection_hdl hdl) {
   std::lock_guard<std::mutex> lock(mutex_);
   connections_.emplace(hdl, std::make_shared<ConnectionData>());
+  if (connections_[hdl]->vad == NULL) {
+    connections_[hdl]->vad = GetVAD();
+  }
 
   SHERPA_ONNX_LOGE("Number of active connections: %d",
                    static_cast<int32_t>(connections_.size()));

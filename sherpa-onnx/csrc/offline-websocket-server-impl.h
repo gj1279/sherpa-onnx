@@ -13,9 +13,11 @@
 #include <utility>
 #include <vector>
 
+#include "sherpa-onnx/csrc/offline-punctuation.h"
 #include "sherpa-onnx/csrc/offline-recognizer.h"
 #include "sherpa-onnx/csrc/parse-options.h"
 #include "sherpa-onnx/csrc/tee-stream.h"
+#include "sherpa-onnx/csrc/voice-activity-detector.h"
 #include "websocketpp/config/asio_no_tls.hpp"  // TODO(fangjun): support TLS
 #include "websocketpp/server.hpp"
 
@@ -51,6 +53,7 @@ struct ConnectionData {
   // We will **reinterpret_cast** it to float.
   // We expect that data.size() == expected_byte_size
   std::vector<int8_t> data;
+  std::shared_ptr<sherpa_onnx::VoiceActivityDetector> vad = NULL;
 
   void Clear() {
     sample_rate = 0;
@@ -113,6 +116,7 @@ class OfflineWebsocketDecoder {
 
   OfflineWebsocketServer *server_;  // Not owned
   OfflineRecognizer recognizer_;
+  std::shared_ptr<sherpa_onnx::OfflinePunctuation> punctu = NULL;
 };
 
 struct OfflineWebsocketServerConfig {
