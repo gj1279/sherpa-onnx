@@ -1,0 +1,48 @@
+#Makefile for online-websocket-client-poco-3531dv200
+TARGET = online-websocket-client-poco-3531dv200
+
+COMPILER_FLAGS	+= -DLINUX -D_LINUX_ -D_LINUX -D_XOPEN_SOURCE=500 -D_REENTRANT -D_THREAD_SAFE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE -DRK_CROSS -DPFRK3588
+
+ARM      = /hisi_env/hisi_linux/hisi-linux-3531D-v200/x86-arm/aarch64-himix200-linux/bin/
+CC       = $(ARM)aarch64-himix200-linux-gcc
+AR       = $(ARM)aarch64-himix200-linux-ar
+LD       = $(ARM)aarch64-himix200-linux-ld
+C++      = $(ARM)aarch64-himix200-linux-g++
+C++LINK  = $(ARM)aarch64-himix200-linux-g++
+STRIP    = $(ARM)aarch64-himix200-linux-strip
+
+CCFLAGS	 += $(COMPILER_FLAGS)  -O2
+
+CCFLAGS  += -I../../../ \
+            -I../../../build-aarch64-linux-gnu/_deps/websocketpp-src \
+			-I/rk3588_env/rk_3588/include \
+			-I/rk3588_env/boost/include
+
+C++FLAGS = $(CCFLAGS)
+
+CFILES   =
+CPPFILES = online-websocket-client-poco.cpp \
+		   TcpClient.cpp \
+		   pcm.cpp \
+		   HttpServerModule.cpp \
+		   HttpServerChannel.cpp \
+		   main.cpp \
+
+LIBS     = -lsherpa-onnx-core -lPocoNet -lPocoJSON -lPocoFoundation -lssl -lcrypto -lgmp -lffi -lgnutls -lp11-kit -lidn -lunistring -ltasn1 -lnettle -lhogweed -lz -lgcrypt -lgpg-error -lmicrohttpd -lpthread -ldl -lrt
+
+LINKPATH = -L../../../build-aarch64-linux-gnu/lib \
+           -L/hisi_env/vxx/himix200_3531D/lib \
+		   -L/hisi_env/vxx/himix200_3531D/lib64 \
+
+$(TARGET) : $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) 
+	$(C++LINK) -o $(TARGET) $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) $(C++FLAGS) $(LINKPATH) $(LIBS)
+	$(STRIP) $(TARGET)
+
+clean:
+	rm -f *.out *.log $(CFILES:.c=.o) $(CPPFILES:.cpp=.o)
+
+.cpp.o:
+	$(C++) -c -o $*.o $(C++FLAGS) $*.cpp
+
+.c.o:
+	$(CC) -c -o $*.o $(CCFLAGS) $*.c

@@ -1,0 +1,45 @@
+#Makefile for online-websocket-client-poco
+TARGET = online-websocket-client-poco
+
+COMPILER_FLAGS += -DLINUX -D_LINUX_ -D_LINUX -DPOCO_BUILD_HOST=ubuntu -DPOCO_TARGET_OSNAME=Linux -DPOCO_HAVE_FD_EPOLL -DPOCO_HAVE_ADDRINFO -DPOCO_HAVE_LIBRESOLV
+
+CC       = gcc
+AR       = ar
+RANLIB   = ranlib
+LD       = ld
+C++      = g++
+C++LINK  = g++
+STRIP    = strip
+
+CCFLAGS	 += $(COMPILER_FLAGS)  -O2
+
+CCFLAGS  += -I. \
+            -I../../../ \
+            -I../../../build-ubuntu/_deps/websocketpp-src
+
+C++FLAGS = $(CCFLAGS)
+
+CFILES   =
+CPPFILES = online-websocket-client-poco.cpp \
+		   TcpClient.cpp \
+		   pcm.cpp \
+		   HttpServerModule.cpp \
+		   HttpServerChannel.cpp \
+		   main.cpp \
+
+LIBS     = -lsherpa-onnx-core -lPocoNet -lPocoJSON -lPocoFoundation -lssl -lcrypto -lgmp -lgnutls -lp11-kit -lidn -lunistring -ltasn1 -lnettle -lhogweed -lffi -lz -lgcrypt -lgpg-error -lmicrohttpd -lpthread -ldl -lrt
+
+LINKPATH = -L../../../build-ubuntu/lib
+
+$(TARGET) : $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) 
+	$(C++LINK) -o $(TARGET) $(CFILES:.c=.o) $(CPPFILES:.cpp=.o) $(C++FLAGS) $(LINKPATH) $(LIBS)
+	$(STRIP) $(TARGET)
+
+clean:
+	rm -f *.out *.log $(CFILES:.c=.o) $(CPPFILES:.cpp=.o)
+
+.cpp.o:
+	$(C++) -c -o $*.o $(C++FLAGS) $*.cpp
+
+.c.o:
+	$(CC) -c -o $*.o $(CCFLAGS) $*.c
